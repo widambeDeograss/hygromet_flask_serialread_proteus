@@ -1,7 +1,7 @@
 import random
 import threading
 import re
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import serial
 import psycopg2
 from flask_socketio import SocketIO
@@ -11,8 +11,6 @@ app = Flask(__name__)
 cors = CORS(app)
 socketio = SocketIO(app)
 
-
-# Function to extract and save Moisture data
 def extract_and_save_rainfall(data, cursor):
     rainfall_match = re.search(r'Rainfall:([A-Za-z]+)', data)
     rainfall_status = rainfall_match.group(1).upper() if rainfall_match else None
@@ -70,18 +68,11 @@ def extract_and_save_ph(data, cursor):
 
 # Function to extract and save Flow Rate data
 def extract_and_save_flow_rate(data, cursor):
-    # flow_rate_match = re.search(r'FlowRate: (\d+)', data)
-    # flow_rate = int(flow_rate_match.group(1)) if flow_rate_match else None
-    #
-    # volume_match = re.search(r'Volume:\s*(-?\d+\.\d+)', data)
-    # flow_rate_volume = float(volume_match.group(1)) if volume_match else None
 
     flow_rate = random.uniform(0, 100)
 
     # Generate random flow rate volume (between -100 and 100)
     flow_rate_volume = random.uniform(-100, 100)
-
-
     if flow_rate is not None:
         cursor.execute("INSERT INTO flow_rate_data (flow_rate, volume) VALUES (%s, %s)", (flow_rate, flow_rate_volume))
         print("Flow Rate data saved - Rate:", flow_rate, "Volume:", flow_rate_volume)
@@ -90,12 +81,26 @@ def extract_and_save_flow_rate(data, cursor):
 conn = psycopg2.connect(database="hydromet", user="postgres", password="post30", host="localhost", port="5432")
 cursor = conn.cursor()
 
-ser = serial.Serial('COM2', 9600)  # Replace 'COMx' with the port where Proteus is sending data
+# ser = serial.Serial('COM9', 9600)  # Replace 'COMx' with the port where Proteus is sending data
 
+# Function to extract and save sensor data
+def save_sensor_data(data):
+    waterLevel = data.get('waterLevel')
+    rainfall = data.get('rainfall')
+    pHValue = data.get('pHValue')
+    soilMoisture = data.get('soilMoisture')
+    flowRate = data.get('flowRate')
+
+    cursor.execute("INSERT INTO water_level_data (status, distance) VALUES (%s, %s)", (waterLevel, waterLevel))
+    cursor.execute("INSERT INTO rainfall_data (rain_status) VALUES (%s)", (rainfall,))
+    cursor.execute("INSERT INTO ph_data (ph_level, status) VALUES (%s, %s)", (pHValue, 'MODERATE'))
+    cursor.execute("INSERT INTO moisture_data (moisture_percentage) VALUES (%s)", (soilMoisture,))
+    cursor.execute("INSERT INTO flow_rate_data (flow_rate, volume) VALUES (%s, %s)", (flowRate, random.uniform(-100, 100)))
+    conn.commit()
 
 def read_serial_data():
     while True:
-        data = ser.readline().decode().strip()
+        data = "ser.readline().decode().strip()"
 
         # Extract and process hydromet data from the received message
         extract_and_save_ph(data, cursor)
@@ -106,10 +111,9 @@ def read_serial_data():
         # Commit the changes to the database
         conn.commit()
 
-
 # Start the serial reading thread when the Flask app starts
-serial_thread = threading.Thread(target=read_serial_data)
-serial_thread.start()
+# serial_thread = threading.Thread(target=read_serial_data)
+# serial_thread.start()
 
 @app.route('/api/latest_data', methods=['GET'])
 def get_latest_data():
@@ -122,7 +126,8 @@ def get_latest_data():
     cursor.execute("SELECT * FROM ph_data ORDER BY timestamp DESC LIMIT 1")
     ph_data = cursor.fetchone()
 
-    cursor.execute("SELECT * FROM flow_rate_data ORDER BY timestamp DESC LIMIT 20")
+    cursor.execute("SELECT * FROM flow_rate_data ORDER BY volume DESC LIMIT 20")
+    # cursor.execute("SELECT * FROM flow_rate_data ORDER BY timestamp DESC LIMIT 20")
     flow_rate_data_list = cursor.fetchall()
 
 
@@ -148,6 +153,19 @@ def get_latest_data():
 
     return jsonify(latest_data)
 
+
+@app.route('/data', methods=['POST'])
+def receive_data():
+    data = request.json
+    print("----------------------", data)
+    save_sensor_data(data)
+    return jsonify({"status": "success"}), 200
+
+
+@app.route('/', methods=['GET'])
+def home_api_test():
+    return "This is a test endpoint and if your seeing this means its working fine"
+
 def send_data():
     while True:
         socketio.emit('update_data', get_latest_data())
@@ -161,5 +179,5 @@ def handle_connect():
 
 
 if __name__ == "__main__":
-    app.run(host="192.168.74.123", port=5000, debug=True)
+    app.run(host="192.168.115.123", port=5000, debug=True)
 
